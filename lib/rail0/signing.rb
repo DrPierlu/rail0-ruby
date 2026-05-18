@@ -33,16 +33,12 @@ module Rail0
     end
 
     # Parameters for signing an authorize or charge call.
+    # The contract hardcodes validAfter=0 and validBefore=payment[:authorizationExpiry];
+    # these are not configurable by the caller.
     SignPaymentParams = Struct.new(
       :private_key, :payment, :amount, :nonce, :contract_address, :token_domain,
-      :valid_after, :valid_before,
       keyword_init: true
-    ) do
-      def initialize(**)
-        super
-        self.valid_after ||= 0
-      end
-    end
+    )
 
     # ================================================================
     #  EIP-712 type strings
@@ -176,7 +172,8 @@ module Rail0
 
     # Sign the EIP-3009 payload required by an authorize call.
     #
-    #   nonce = client.payments.authorize_nonce(payment_id, payment[:payer])[:nonce]
+    #   config_hash = client.payments.hash(payment)[:hash]
+    #   nonce = client.payments.authorize_nonce(payment_id, config_hash)[:nonce]
     #   sig   = Rail0::Signing.sign_authorize(Rail0::Signing::SignPaymentParams.new(
     #     private_key: "0x...", payment: payment, amount: 50_000_000,
     #     nonce: nonce, contract_address: "0x...", token_domain: token_domain
@@ -187,14 +184,13 @@ module Rail0
     # @param params [SignPaymentParams]
     # @return [Eip3009Signature]
     def self.sign_authorize(params)
-      valid_before = params.valid_before || params.payment[:authorizationExpiry]
       do_sign(
         params.private_key, params.token_domain,
         from:         params.payment[:payer],
         to:           params.contract_address,
         value:        params.amount,
-        valid_after:  params.valid_after,
-        valid_before: valid_before,
+        valid_after:  0,
+        valid_before: params.payment[:authorizationExpiry],
         nonce:        params.nonce
       )
     end
@@ -204,14 +200,13 @@ module Rail0
     # @param params [SignPaymentParams]
     # @return [Eip3009Signature]
     def self.sign_charge(params)
-      valid_before = params.valid_before || params.payment[:authorizationExpiry]
       do_sign(
         params.private_key, params.token_domain,
         from:         params.payment[:payer],
         to:           params.contract_address,
         value:        params.amount,
-        valid_after:  params.valid_after,
-        valid_before: valid_before,
+        valid_after:  0,
+        valid_before: params.payment[:authorizationExpiry],
         nonce:        params.nonce
       )
     end

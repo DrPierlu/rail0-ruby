@@ -62,18 +62,18 @@ module Rail0
 
       # Returns the EIP-3009 nonce the payer must use when signing an authorize call.
       # @param payment_id [String]
-      # @param payer [String] Ethereum address
+      # @param config_hash [String] EIP-712 digest of the Payment configuration (from payments.hash)
       # @return [Hash] with key :nonce
-      def authorize_nonce(payment_id, payer)
-        @http.get("/payments/#{payment_id}/authorize-nonce?payer=#{payer}")
+      def authorize_nonce(payment_id, config_hash)
+        @http.get("/payments/#{payment_id}/authorize-nonce?configHash=#{config_hash}")
       end
 
       # Returns the EIP-3009 nonce the payer must use when signing a charge call.
       # @param payment_id [String]
-      # @param payer [String] Ethereum address
+      # @param config_hash [String] EIP-712 digest of the Payment configuration (from payments.hash)
       # @return [Hash] with key :nonce
-      def charge_nonce(payment_id, payer)
-        @http.get("/payments/#{payment_id}/charge-nonce?payer=#{payer}")
+      def charge_nonce(payment_id, config_hash)
+        @http.get("/payments/#{payment_id}/charge-nonce?configHash=#{config_hash}")
       end
 
       # Compute the canonical EIP-712 digest of a Payment configuration.

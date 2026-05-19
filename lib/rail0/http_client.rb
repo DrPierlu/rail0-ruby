@@ -50,6 +50,10 @@ module Rail0
       request(:post, path, body)
     end
 
+    def put(path, body = nil)
+      request(:put, path, body)
+    end
+
     private
 
     def request(method, path, body = nil)

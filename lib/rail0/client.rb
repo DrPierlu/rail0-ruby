@@ -1,22 +1,14 @@
 require_relative "http_client"
 require_relative "resources/payments"
-require_relative "resources/tokens"
-require_relative "resources/utils"
 
 module Rail0
   # Entry point for the RAIL0 SDK.
   #
   #   client = Rail0::Client.new(base_url: "https://api.rail0.xyz")
-  #   state  = client.payments.get(payment_id)
+  #   resp   = client.payments.create_payment(payment: config, amount: "50000000", chain_id: 84532, mode: "authorize")
   class Client
     # @return [Resources::Payments] Payment lifecycle operations.
     attr_reader :payments
-
-    # @return [Resources::Tokens] Token allowlist queries.
-    attr_reader :tokens
-
-    # @return [Resources::Utils] Contract introspection: domain separator, version.
-    attr_reader :utils
 
     # @param base_url [String] Base URL of the RAIL0 API, e.g. "https://api.rail0.xyz".
     # @param headers [Hash] Default headers merged into every request.
@@ -30,8 +22,6 @@ module Rail0
         logger: logger, max_retries: max_retries, retry_delay: retry_delay
       )
       @payments = Resources::Payments.new(http)
-      @tokens   = Resources::Tokens.new(http)
-      @utils    = Resources::Utils.new(http)
     end
   end
 end

@@ -6,187 +6,210 @@ RSpec.describe Rail0::Client do
       .to_return(status:, body: body.to_json, headers: { "Content-Type" => "application/json" })
   end
 
-  def stub_post(path, body, status: 202)
+  def stub_post(path, body, status: 200)
     stub_request(:post, "#{BASE_URL}#{path}")
       .to_return(status:, body: body.to_json, headers: { "Content-Type" => "application/json" })
   end
 
+  def stub_put(path, body, status: 200)
+    stub_request(:put, "#{BASE_URL}#{path}")
+      .to_return(status:, body: body.to_json, headers: { "Content-Type" => "application/json" })
+  end
+
   # ================================================================
-  #  payments.get
+  #  payments.create — POST /payments
+  # ================================================================
+
+  describe "payments.create" do
+    it "returns a payment intent with signingPayload" do
+      response = {
+        paymentId:      PAYMENT_ID,
+        configHash:     "0xabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        payment:        PAYMENT_INPUT.merge(authorizationExpiry: 9_999_999_999, refundExpiry: 9_999_999_999, feeBps: 0, feeReceiver: "0x0000000000000000000000000000000000000000"),
+        chainId:        84532,
+        rail0Contract:  "0xRail0Contract0000000000000000000000000000",
+        signingPayload: { domain: {}, types: {}, primaryType: "TransferWithAuthorization", message: {} }
+      }
+      stub_post("/payments", response, status: 201)
+
+      result = client.payments.create(payment: PAYMENT_INPUT, chainId: 84532, mode: "authorize")
+
+      expect(result[:paymentId]).to eq(PAYMENT_ID)
+      expect(result[:signingPayload]).to be_a(Hash)
+    end
+  end
+
+  # ================================================================
+  #  payments.get — GET /payments/{id}
   # ================================================================
 
   describe "payments.get" do
-    it "returns payment state" do
+    it "returns current payment state" do
       stub_get("/payments/#{PAYMENT_ID}", PAYMENT_RESPONSE)
 
       result = client.payments.get(PAYMENT_ID)
 
       expect(result[:paymentId]).to eq(PAYMENT_ID)
-      expect(result[:state][:exists]).to be(true)
-      expect(result[:state][:capturableAmount]).to eq("50000000")
+      expect(result[:status]).to eq("authorized")
+      expect(result[:onChain][:exists]).to be(true)
+      expect(result[:onChain][:capturableAmount]).to eq("100000000")
     end
   end
 
   # ================================================================
-  #  payments.authorize
+  #  payments.sign — PUT /payments/{id}/sign
   # ================================================================
 
-  describe "payments.authorize" do
-    it "returns a transaction response" do
-      stub_post("/payments/#{PAYMENT_ID}/authorize", TX_RESPONSE)
+  describe "payments.sign" do
+    it "stores the payer signature and returns recoveredPayer" do
+      stub_put("/payments/#{PAYMENT_ID}/sign", SIGN_RESPONSE)
 
-      result = client.payments.authorize(PAYMENT_ID, {
-        payment: PAYMENT,
-        amount:  "50000000",
-        v:       27,
-        r:       "0x" + "11" * 32,
-        s:       "0x" + "22" * 32
+      result = client.payments.sign(PAYMENT_ID, {
+        signature: "0x" + "ab" * 65
       })
 
-      expect(result[:status]).to eq("pending")
-      expect(result[:transactionHash]).to eq(TX_RESPONSE[:transactionHash])
+      expect(result[:status]).to eq("signature_stored")
+      expect(result[:recoveredPayer]).to eq(PAYMENT_INPUT[:payer])
     end
   end
 
   # ================================================================
-  #  payments.charge
+  #  payments.prepare_authorize — POST /payments/{id}/authorize
   # ================================================================
 
-  describe "payments.charge" do
-    it "returns a transaction response" do
-      stub_post("/payments/#{PAYMENT_ID}/charge", TX_RESPONSE)
+  describe "payments.prepare_authorize" do
+    it "returns an unsigned transaction" do
+      stub_post("/payments/#{PAYMENT_ID}/authorize", PREPARE_RESPONSE)
 
-      result = client.payments.charge(PAYMENT_ID, {
-        payment: PAYMENT, amount: "25000000",
-        v: 27, r: "0x" + "11" * 32, s: "0x" + "22" * 32
+      result = client.payments.prepare_authorize(PAYMENT_ID)
+
+      expect(result[:unsignedTransaction]).to eq(PREPARE_RESPONSE[:unsignedTransaction])
+      expect(result[:gasLimit]).to eq("200000")
+    end
+  end
+
+  # ================================================================
+  #  payments.prepare_charge — POST /payments/{id}/charge
+  # ================================================================
+
+  describe "payments.prepare_charge" do
+    it "returns an unsigned charge transaction" do
+      stub_post("/payments/#{PAYMENT_ID}/charge", PREPARE_RESPONSE)
+
+      result = client.payments.prepare_charge(PAYMENT_ID)
+
+      expect(result[:unsignedTransaction]).to eq(PREPARE_RESPONSE[:unsignedTransaction])
+    end
+  end
+
+  # ================================================================
+  #  payments.prepare_capture — POST /payments/{id}/capture
+  # ================================================================
+
+  describe "payments.prepare_capture" do
+    it "returns an unsigned capture transaction" do
+      stub_post("/payments/#{PAYMENT_ID}/capture", PREPARE_RESPONSE)
+
+      result = client.payments.prepare_capture(PAYMENT_ID, { amount: "100000000" })
+
+      expect(result[:chainId]).to eq(84532)
+    end
+  end
+
+  # ================================================================
+  #  payments.prepare_void — POST /payments/{id}/void
+  # ================================================================
+
+  describe "payments.prepare_void" do
+    it "returns an unsigned void transaction" do
+      stub_post("/payments/#{PAYMENT_ID}/void", PREPARE_RESPONSE)
+
+      result = client.payments.prepare_void(PAYMENT_ID)
+
+      expect(result[:nonce]).to eq(42)
+    end
+  end
+
+  # ================================================================
+  #  payments.prepare_release — POST /payments/{id}/release
+  # ================================================================
+
+  describe "payments.prepare_release" do
+    it "returns an unsigned release transaction" do
+      stub_post("/payments/#{PAYMENT_ID}/release", PREPARE_RESPONSE)
+
+      result = client.payments.prepare_release(PAYMENT_ID)
+
+      expect(result[:to]).to eq(PREPARE_RESPONSE[:to])
+    end
+
+    it "accepts an optional callerAddress" do
+      stub_post("/payments/#{PAYMENT_ID}/release", PREPARE_RESPONSE)
+
+      result = client.payments.prepare_release(PAYMENT_ID, { callerAddress: PAYMENT_INPUT[:payer] })
+
+      expect(result[:unsignedTransaction]).to eq(PREPARE_RESPONSE[:unsignedTransaction])
+    end
+  end
+
+  # ================================================================
+  #  payments.prepare_approve — POST /payments/{id}/approve
+  # ================================================================
+
+  describe "payments.prepare_approve" do
+    it "returns an unsigned ERC-20 approve transaction" do
+      stub_post("/payments/#{PAYMENT_ID}/approve", PREPARE_RESPONSE)
+
+      result = client.payments.prepare_approve(PAYMENT_ID, { amount: "115792089237316195423570985008687907853269984665640564039457584007913129639935" })
+
+      expect(result[:data]).to eq(PREPARE_RESPONSE[:data])
+    end
+  end
+
+  # ================================================================
+  #  payments.prepare_refund — POST /payments/{id}/refund
+  # ================================================================
+
+  describe "payments.prepare_refund" do
+    it "returns an unsigned refund transaction" do
+      stub_post("/payments/#{PAYMENT_ID}/refund", PREPARE_RESPONSE)
+
+      result = client.payments.prepare_refund(PAYMENT_ID, { amount: "50000000" })
+
+      expect(result[:gasLimit]).to eq("200000")
+    end
+  end
+
+  # ================================================================
+  #  payments.submit_transaction — POST /payments/{id}/transactions/submit
+  # ================================================================
+
+  describe "payments.submit_transaction" do
+    it "returns 202 with status submitting" do
+      stub_post("/payments/#{PAYMENT_ID}/transactions/submit", SUBMIT_RESPONSE, status: 202)
+
+      result = client.payments.submit_transaction(PAYMENT_ID, {
+        signedTransaction: "0x02f8ab1234"
       })
 
-      expect(result[:status]).to eq("pending")
+      expect(result[:paymentId]).to eq(PAYMENT_ID)
+      expect(result[:status]).to eq("submitting")
     end
   end
 
   # ================================================================
-  #  payments.capture
+  #  merchants.payment_methods — GET /merchants/{id}/payment-methods
   # ================================================================
 
-  describe "payments.capture" do
-    it "returns a transaction response" do
-      stub_post("/payments/#{PAYMENT_ID}/capture", TX_RESPONSE)
+  describe "merchants.payment_methods" do
+    it "returns a list of accepted payment methods" do
+      stub_get("/merchants/#{MERCHANT_ID}/payment-methods", [PAYMENT_METHOD])
 
-      result = client.payments.capture(PAYMENT_ID, { payment: PAYMENT, amount: "50000000" })
+      result = client.merchants.payment_methods(MERCHANT_ID)
 
-      expect(result[:transactionHash]).to eq(TX_RESPONSE[:transactionHash])
-    end
-  end
-
-  # ================================================================
-  #  payments.void / release / refund
-  # ================================================================
-
-  describe "payments.void" do
-    it "returns a transaction response" do
-      stub_post("/payments/#{PAYMENT_ID}/void", TX_RESPONSE)
-      result = client.payments.void(PAYMENT_ID, { payment: PAYMENT })
-      expect(result[:status]).to eq("pending")
-    end
-  end
-
-  describe "payments.release" do
-    it "returns a transaction response" do
-      stub_post("/payments/#{PAYMENT_ID}/release", TX_RESPONSE)
-      result = client.payments.release(PAYMENT_ID, { payment: PAYMENT })
-      expect(result[:status]).to eq("pending")
-    end
-  end
-
-  describe "payments.refund" do
-    it "returns a transaction response" do
-      stub_post("/payments/#{PAYMENT_ID}/refund", TX_RESPONSE)
-      result = client.payments.refund(PAYMENT_ID, { payment: PAYMENT, amount: "10000000" })
-      expect(result[:status]).to eq("pending")
-    end
-  end
-
-  # ================================================================
-  #  payments.authorize_nonce / charge_nonce
-  # ================================================================
-
-  describe "payments.authorize_nonce" do
-    it "returns a nonce" do
-      nonce = "0xaaaabbbbccccddddaaaabbbbccccddddaaaabbbbccccddddaaaabbbbccccdddd"
-      payer = PAYMENT[:payer]
-      stub_get("/payments/#{PAYMENT_ID}/authorize-nonce?payer=#{payer}", { nonce: })
-
-      result = client.payments.authorize_nonce(PAYMENT_ID, payer)
-
-      expect(result[:nonce]).to eq(nonce)
-    end
-  end
-
-  describe "payments.charge_nonce" do
-    it "returns a nonce" do
-      nonce = "0xaaaabbbbccccddddaaaabbbbccccddddaaaabbbbccccddddaaaabbbbccccdddd"
-      payer = PAYMENT[:payer]
-      stub_get("/payments/#{PAYMENT_ID}/charge-nonce?payer=#{payer}", { nonce: })
-
-      result = client.payments.charge_nonce(PAYMENT_ID, payer)
-
-      expect(result[:nonce]).to eq(nonce)
-    end
-  end
-
-  # ================================================================
-  #  payments.hash
-  # ================================================================
-
-  describe "payments.hash" do
-    it "returns a config hash" do
-      config_hash = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-      stub_post("/payments/hash", { hash: config_hash }, status: 200)
-
-      result = client.payments.hash(PAYMENT)
-
-      expect(result[:hash]).to eq(config_hash)
-    end
-  end
-
-  # ================================================================
-  #  tokens.is_accepted
-  # ================================================================
-
-  describe "tokens.is_accepted" do
-    it "returns token status" do
-      address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-      stub_get("/tokens/#{address}", { address:, accepted: true })
-
-      result = client.tokens.is_accepted(address)
-
-      expect(result[:accepted]).to be(true)
-    end
-  end
-
-  # ================================================================
-  #  utils.domain_separator / version
-  # ================================================================
-
-  describe "utils.domain_separator" do
-    it "returns the domain separator" do
-      ds = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
-      stub_get("/domain-separator", { domainSeparator: ds })
-
-      result = client.utils.domain_separator
-
-      expect(result[:domainSeparator]).to eq(ds)
-    end
-  end
-
-  describe "utils.version" do
-    it "returns the contract version" do
-      stub_get("/version", { version: 6 })
-
-      result = client.utils.version
-
-      expect(result[:version]).to eq(6)
+      expect(result).to be_an(Array)
+      expect(result.first[:tokenSymbol]).to eq("USDC")
+      expect(result.first[:isDefault]).to be(true)
     end
   end
 
@@ -195,45 +218,41 @@ RSpec.describe Rail0::Client do
   # ================================================================
 
   describe "error handling" do
-    it "raises Rail0::ApiError on 404" do
+    it "raises Rail0::ApiError on 422 (payment not found)" do
       stub_get("/payments/#{PAYMENT_ID}",
-               { error: "PaymentNotFound", message: "No payment exists for the given paymentId." },
-               status: 404)
+               { error: "payment_not_found", message: "No payment exists for the given paymentId." },
+               status: 422)
 
       expect { client.payments.get(PAYMENT_ID) }
         .to raise_error(Rail0::ApiError) do |err|
-          expect(err.status).to eq(404)
-          expect(err.error).to eq("PaymentNotFound")
+          expect(err.status).to eq(422)
+          expect(err.error).to eq("payment_not_found")
           expect(err.message).to include("No payment exists")
         end
     end
 
-    it "raises Rail0::ApiError on 409" do
-      stub_post("/payments/#{PAYMENT_ID}/authorize",
-                { error: "PaymentAlreadyExists", message: "Payment already exists." },
-                status: 409)
+    it "raises Rail0::ApiError on 400 (missing fields)" do
+      stub_post("/payments/#{PAYMENT_ID}/capture",
+                { error: "missing_amount", message: "amount is required." },
+                status: 400)
 
-      expect do
-        client.payments.authorize(PAYMENT_ID, {
-          payment: PAYMENT, amount: "50000000",
-          v: 27, r: "0x" + "11" * 32, s: "0x" + "22" * 32
-        })
-      end.to raise_error(Rail0::ApiError) do |err|
-        expect(err.status).to eq(409)
-        expect(err.error).to eq("PaymentAlreadyExists")
-      end
+      expect { client.payments.prepare_capture(PAYMENT_ID, {}) }
+        .to raise_error(Rail0::ApiError) do |err|
+          expect(err.status).to eq(400)
+          expect(err.error).to eq("missing_amount")
+        end
     end
 
-    it "raises Rail0::ApiError on 422" do
-      stub_post("/payments/#{PAYMENT_ID}/capture",
-                { error: "AuthorizationExpired", message: "The authorizationExpiry timestamp has passed." },
+    it "raises Rail0::ApiError on 422 (wrong payment state for submit)" do
+      stub_post("/payments/#{PAYMENT_ID}/transactions/submit",
+                { error: "no_pending_operation", message: "No prepare step was called yet." },
                 status: 422)
 
       expect do
-        client.payments.capture(PAYMENT_ID, { payment: PAYMENT, amount: "50000000" })
+        client.payments.submit_transaction(PAYMENT_ID, { signedTransaction: "0x02f8ab" })
       end.to raise_error(Rail0::ApiError) do |err|
         expect(err.status).to eq(422)
-        expect(err.error).to eq("AuthorizationExpired")
+        expect(err.error).to eq("no_pending_operation")
       end
     end
   end
@@ -261,8 +280,8 @@ RSpec.describe Rail0::Client do
       entries = []
       logged_client = Rail0::Client.new(base_url: BASE_URL, logger: ->(e) { entries << e })
       stub_get("/payments/#{PAYMENT_ID}",
-               { error: "PaymentNotFound", message: "Not found." },
-               status: 404)
+               { error: "payment_not_found", message: "Not found." },
+               status: 422)
 
       expect { logged_client.payments.get(PAYMENT_ID) }.to raise_error(Rail0::ApiError)
 
@@ -305,7 +324,7 @@ RSpec.describe Rail0::Client do
       attempts = 0
       stub_request(:get, "#{BASE_URL}/payments/#{PAYMENT_ID}").to_return do
         attempts += 1
-        { status: 404, body: { error: "PaymentNotFound", message: "Not found." }.to_json,
+        { status: 422, body: { error: "payment_not_found", message: "Not found." }.to_json,
           headers: { "Content-Type" => "application/json" } }
       end
 

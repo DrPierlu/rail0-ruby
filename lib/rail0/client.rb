@@ -6,7 +6,7 @@ module Rail0
   # Entry point for the RAIL0 SDK.
   #
   #   client = Rail0::Client.new(base_url: "https://api.rail0.xyz")
-  #   resp   = client.payments.create_payment(payment: config, amount: "50000000", chain_id: 84532, mode: "authorize")
+  #   resp   = client.payments.create(payment: { payer: "0x...", payee: "0x...", token: "0x...", amount: "100000000" }, chain_id: 84532, mode: "authorize")
   class Client
     # @return [Resources::Merchants] Merchant configuration operations.
     attr_reader :merchants

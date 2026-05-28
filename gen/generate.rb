@@ -92,20 +92,17 @@ STRUCT_ORDER = %w[
   PaymentMethod
   CreatePaymentRequest
   CreatePaymentResponse
+  GetPaymentResponse
   PrepareTransactionResponse
   SubmitTransactionRequest
-  ApproveRequest
-  ApproveResponse
+  SubmitTransactionAcceptedResponse
   CapturePaymentRequest
-  CapturePaymentResponse
-  ChargePaymentResponse
+  ApproveRequest
+  RefundPaymentRequest
+  ReleaseRequest
   PayerSignatureRequest
   PayerSignatureResponse
-  AuthorizePaymentResponse
-  ReleasePaymentResponse
-  VoidPaymentResponse
-  RefundPaymentRequest
-  RefundPaymentResponse
+  Transaction
   Error
 ].freeze
 

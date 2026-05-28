@@ -16,207 +16,193 @@ module Rail0
       :payer,                # Address — Buyer address. Funds are pulled from this address.
       :payee,                # Address — Merchant address. Authorized to capture, void, and refund.
       :token,                # Address — EIP-3009-capable ERC-20 token address (must be accepted by the RAIL0 deployment).
-      :amount,               # Uint256String — Exact amount the payer commits to pay (in token base units, fits in uint120).
+      :amount,               # Uint256String — Exact amount the payer commits to pay (in token base units).
       :authorizationExpiry,  # Integer — Unix timestamp (seconds). Capture must happen before this; release opens after.
       :refundExpiry,         # Integer — Unix timestamp (seconds). Refund must happen before this. Must be >= authorizationExpiry.
       :feeBps,               # Integer — Fee in basis points (0 = no fee, 10000 = 100%).
-      :feeReceiver,          # Address — Recipient of the fee on each capture. Use the zero address (0x0000…0000) when feeBps is 0.
+      :feeReceiver,          # Address — Recipient of the fee on each capture. Use the zero address when feeBps is 0.
       keyword_init: true
     )
 
-    # EIP-712 domain for the token contract (used by EIP-3009 TransferWithAuthorization).
+    # EIP-712 domain for the token contract.
     EIP712Domain = Struct.new(
-      :name,               # String — Token's EIP-712 domain name.
-      :version,            # String — Token's EIP-712 domain version.
-      :chainId,            # Integer — EVM chain ID.
+      :name,               # String
+      :version,            # String
+      :chainId,            # Integer
       :verifyingContract,  # Address — Token contract address.
       keyword_init: true
     )
 
-    # Message fields for the EIP-3009 TransferWithAuthorization typed-data signature.
+    # Message fields for the EIP-3009 TransferWithAuthorization signature.
     EIP3009Message = Struct.new(
-      :from,         # Address — Payer address (token sender).
-      :to,           # Address — RAIL0 contract address (token recipient / escrow).
-      :value,        # Uint256String — Amount to transfer (same as the requested authorization amount).
-      :validAfter,   # Uint256String — Always '0' for RAIL0 authorize flows.
-      :validBefore,  # Uint256String — Equals payment.authorizationExpiry (Unix timestamp as string).
-      :nonce,        # Bytes32 — keccak256(NONCE_PREFIX, paymentId, configHash) where NONCE_PREFIX is `RAIL0.AUTHORIZE` for mode=authorize and `RAIL0.CHARGE` for mode=charge. Binds the signature to the exact Payment configuration and operation type.
+      :from,         # Address
+      :to,           # Address — RAIL0 contract address.
+      :value,        # Uint256String
+      :validAfter,   # Uint256String — Always '0' for RAIL0 flows.
+      :validBefore,  # Uint256String — Equals authorizationExpiry.
+      :nonce,        # Bytes32 — keccak256(NONCE_PREFIX, paymentId, configHash). Binds the signature to the exact config and operation type.
       keyword_init: true
     )
 
-    # EIP-712 typed-data structure that the payer must sign. The `domain`, `types`, and `message` fields
-    # follow the EIP-712 standard. Signing options: (a) wallet users pass this object verbatim to
-    # `eth_signTypedData_v4`; (b) backends with direct key access compute `keccak256('\x19\x01' ||
-    # domainSeparator || hashStruct(message))` with any EIP-712 library and sign with secp256k1. Both
-    # approaches produce the same 65-byte signature to submit to `PUT /payments/{paymentId}/sign`.
+    # EIP-712 typed-data structure that the payer must sign. Pass verbatim to `eth_signTypedData_v4`
+    # (browser wallets) or compute the hash with any EIP-712 library (backend keys).
     SigningPayload = Struct.new(
       :domain,       # EIP712Domain
-      :types,        # Hash — EIP-712 type definitions.
-      :primaryType,  # String — EIP-712 primary type.
+      :types,        # Hash
+      :primaryType,  # String
       :message,      # EIP3009Message
       keyword_init: true
     )
 
-    # Buyer-supplied payment parameters. Policy fields (amount, authorizationExpiry, refundExpiry,
-    # feeBps, feeReceiver) are fixed API configuration and are applied server-side — they are not
-    # accepted in input but appear in CreatePaymentResponse.payment.
+    # Buyer-supplied payment parameters. Policy fields (authorizationExpiry, refundExpiry, feeBps,
+    # feeReceiver) are fixed API configuration applied server-side.
     PaymentInput = Struct.new(
-      :payer,  # Address — Buyer address. Funds are pulled from this address.
-      :payee,  # Address — Merchant wallet address (walletAddress from GET /merchants/{id}/payment-methods).
-      :token,  # Address — ERC-20 token address (tokenAddress from GET /merchants/{id}/payment-methods).
+      :payer,   # Address — Buyer address. Funds are pulled from this address.
+      :payee,   # Address — Merchant wallet address (walletAddress from GET /merchants/{id}/payment-methods).
+      :token,   # Address — ERC-20 token address (tokenAddress from GET /merchants/{id}/payment-methods).
+      :amount,  # Uint256String — Amount to pay (in token base units).
       keyword_init: true
     )
 
     # A single accepted payment method for a merchant: one (chain, token, wallet) combination.
     PaymentMethod = Struct.new(
-      :id,             # Integer — MERCHANT_WALLETS row identifier.
-      :tokenId,        # Integer — TOKENS row identifier (tokens.id).
-      :chainId,        # Integer — EVM chain ID, derived from the token record.
-      :chainName,      # String — Human-readable chain name.
+      :id,             # Integer
+      :tokenId,        # Integer
+      :chainId,        # Integer
+      :chainName,      # String
       :tokenAddress,   # Address — ERC-20 token contract address on the chain.
-      :tokenSymbol,    # String — Token ticker symbol.
-      :tokenDecimals,  # Integer — Token decimal places.
+      :tokenSymbol,    # String
+      :tokenDecimals,  # Integer
       :walletAddress,  # Address — Merchant wallet address to use as `payee` in PaymentConfig.
-      :isDefault,      # Boolean — True for the merchant's pre-selected payment method.
+      :isDefault,      # Boolean
       keyword_init: true
     )
 
-    # Parameters needed to create a payment intent. The API generates a unique `paymentId`, applies its
-    # fixed policy config, and constructs the EIP-712 signing payload.
+    # Parameters needed to create a payment intent.
     CreatePaymentRequest = Struct.new(
       :payment,  # PaymentInput
       :chainId,  # Integer — EVM chain ID of the target network.
-      :mode,     # String — `authorize` — funds are held in escrow and captured later by the payee. `charge` — one-shot: funds are immediately distributed to payee and feeReceiver with no escrow window. The two modes use different EIP-3009 nonce prefixes; a signature produced for one cannot be submitted for the other.
+      :mode,     # String — `authorize` — funds held in escrow, captured later. `charge` — one-shot: funds immediately distributed. The two modes use different EIP-3009 nonce prefixes; a signature for one cannot be reused for the other.
       keyword_init: true
     )
 
     CreatePaymentResponse = Struct.new(
-      :paymentId,       # Bytes32 — Unique identifier for this payment (generated by the API, bytes32 hex).
-      :configHash,      # Bytes32 — EIP-712 hash of the Payment struct over the RAIL0 domain. Commits the signature to the exact payment terms.
+      :paymentId,       # Bytes32 — Unique identifier for this payment.
+      :configHash,      # Bytes32 — EIP-712 hash of the Payment struct. Commits the signature to the exact payment terms.
       :payment,         # PaymentConfig
-      :chainId,         # Integer — EVM chain ID.
+      :chainId,         # Integer
       :rail0Contract,   # Address — Address of the RAIL0 contract on the target chain.
       :signingPayload,  # SigningPayload
       keyword_init: true
     )
 
-    # An unsigned EIP-1559 transaction ready for the payee to sign. Signing options: (a) wallet users
-    # pass `unsignedTransaction` to `eth_signTransaction`; (b) backends with direct key access sign the
-    # RLP blob with any secp256k1 library (e.g. `wallet.signTransaction` in ethers.js). Submit the
-    # resulting signed RLP to the corresponding `/submit` endpoint.
-    PrepareTransactionResponse = Struct.new(
-      :unsignedTransaction,   # String — RLP-encoded unsigned EIP-1559 transaction (type 2). Pass to `eth_signTransaction` (browser wallet) or sign directly with a secp256k1 library if the key is available in-process.
-      :to,                    # Address — RAIL0 contract address (informational; already encoded in `unsignedTransaction`).
-      :data,                  # String — ABI-encoded calldata (informational; already encoded in `unsignedTransaction`).
-      :chainId,               # Integer — EVM chain ID.
-      :nonce,                 # Integer — Transaction nonce for the payee's account.
-      :maxFeePerGas,          # Uint256String — EIP-1559 max fee per gas (wei).
-      :maxPriorityFeePerGas,  # Uint256String — EIP-1559 max priority fee per gas (wei).
-      :gasLimit,              # Uint256String — Estimated gas limit with a safety margin.
+    # Current state of a payment record. `onChain` is populated when the payment has an active on-chain
+    # presence. `lastTxHash`, `failureCode`, and `failureMessage` are present only when relevant.
+    GetPaymentResponse = Struct.new(
+      :paymentId,            # Bytes32
+      :status,               # String — Current lifecycle state. `submitting` = worker enqueued, not yet broadcast. `submitted` = transaction sent to the network, waiting for on-chain confirmation. `failed` is terminal.
+      :mode,                 # String
+      :amount,               # Uint256String
+      :payer,                # Address
+      :payee,                # Address
+      :token,                # Address
+      :chainId,              # Integer
+      :authorizationExpiry,  # Integer
+      :refundExpiry,         # Integer
+      :onChain,              # Hash — Live on-chain amounts. Present when status is authorized, captured, voided, released, charged, or refunded.
+      :lastTxHash,           # Bytes32 — Hash of the most recently broadcast transaction. Present once the worker has sent the transaction to the network.
+      :failureCode,          # String — Machine-readable failure reason. Present only when status=failed.
+      :failureMessage,       # String — Human-readable failure description. Present only when status=failed.
       keyword_init: true
     )
 
-    # Signed transaction to submit on-chain.
+    # An unsigned EIP-1559 transaction ready for the payee to sign. Sign with `eth_signTransaction`
+    # (browser wallet) or any secp256k1 library, then submit to `POST
+    # /payments/{paymentId}/transactions/submit`.
+    PrepareTransactionResponse = Struct.new(
+      :unsignedTransaction,   # String — RLP-encoded unsigned EIP-1559 transaction (type 2).
+      :to,                    # Address — Target contract address (informational; already encoded in `unsignedTransaction`).
+      :data,                  # String — ABI-encoded calldata (informational).
+      :chainId,               # Integer
+      :nonce,                 # Integer
+      :maxFeePerGas,          # Uint256String
+      :maxPriorityFeePerGas,  # Uint256String
+      :gasLimit,              # Uint256String
+      keyword_init: true
+    )
+
+    # Signed transaction to broadcast on-chain. The operation is inferred server-side from the prepare
+    # step that was called — the client does not need to specify it.
     SubmitTransactionRequest = Struct.new(
       :signedTransaction,  # String — RLP-encoded signed EIP-1559 transaction as returned by `eth_signTransaction`.
       keyword_init: true
     )
 
-    # Amount to approve on the token contract. Setting this to the maximum expected refund (or
-    # `type(uint256).max` for unlimited) avoids repeated approvals.
-    ApproveRequest = Struct.new(
-      :amount,  # Uint256String — Allowance to grant the RAIL0 contract (in token base units). Use '115792089237316195423570985008687907853269984665640564039457584007913129639935' for unlimited approval.
+    # Acknowledgement that the transaction has been enqueued. Poll `GET /payments/{paymentId}` for the
+    # final outcome.
+    SubmitTransactionAcceptedResponse = Struct.new(
+      :paymentId,  # Bytes32 — Payment identifier.
+      :status,     # String — Always `submitting` — the worker has not yet received the on-chain receipt.
+      :token,      # Address — Token contract address. Present only when `operation=approve`.
+      :spender,    # Address — RAIL0 contract address approved as spender. Present only when `operation=approve`.
       keyword_init: true
     )
 
-    ApproveResponse = Struct.new(
-      :transactionHash,  # Bytes32 — On-chain transaction hash of the `approve()` call.
-      :token,            # Address — Token contract on which the approval was set.
-      :spender,          # Address — RAIL0 contract address that was approved as spender.
-      :amount,           # Uint256String — Approved allowance amount.
-      keyword_init: true
-    )
-
-    # Amount to capture from escrow. May be less than the total capturable balance for a partial
-    # capture.
+    # Amount to capture from escrow. May be less than `capturableAmount` for a partial capture.
     CapturePaymentRequest = Struct.new(
       :amount,  # Uint256String — Amount to capture (in token base units). Must be > 0 and <= current capturableAmount.
       keyword_init: true
     )
 
-    CapturePaymentResponse = Struct.new(
-      :paymentId,            # Bytes32 — Payment identifier.
-      :transactionHash,      # Bytes32 — On-chain transaction hash of the `capture()` call.
-      :capturedAmount,       # Uint256String — Gross amount captured in this call (before fee deduction). Matches the `amount` parameter passed to the contract.
-      :feeAmount,            # Uint256String — Fee deducted from this capture and sent to feeReceiver. '0' when feeBps is 0.
-      :capturableAmount,     # Uint256String — Remaining escrowed amount still available for future captures.
-      :refundableAmount,     # Uint256String — Cumulative amount already captured and eligible for refund (until refundExpiry).
-      :authorizationExpiry,  # Integer — Unix timestamp after which further captures are no longer possible.
+    # Allowance to grant the RAIL0 contract on the token.
+    ApproveRequest = Struct.new(
+      :amount,  # Uint256String — Allowance amount (in token base units). Use '115792089237316195423570985008687907853269984665640564039457584007913129639935' for unlimited approval.
       keyword_init: true
     )
 
-    ChargePaymentResponse = Struct.new(
-      :paymentId,         # Bytes32 — Payment identifier.
-      :transactionHash,   # Bytes32 — On-chain transaction hash of the `charge()` call.
-      :chargedAmount,     # Uint256String — Gross amount charged (before fee deduction). Matches the `amount` parameter passed to the contract.
-      :feeAmount,         # Uint256String — Fee sent to feeReceiver. '0' when feeBps is 0.
-      :refundableAmount,  # Uint256String — Amount eligible for refund (equals chargedAmount; the full gross amount is tracked as refundable by the contract).
-      keyword_init: true
-    )
-
-    # EIP-712 signature over the `signingPayload` returned by `POST /payments`. Browser wallets return
-    # this directly from `eth_signTypedData_v4`; backends produce it with any EIP-712 library. The
-    # on-chain verification only checks the recovered address.
-    PayerSignatureRequest = Struct.new(
-      :signature,  # String — 65-byte secp256k1 signature in hex (0x-prefixed, 132 chars): r (32 bytes) + s (32 bytes) + v (1 byte). This is the format returned directly by `eth_signTypedData_v4` and all standard Ethereum signing libraries.
-      keyword_init: true
-    )
-
-    PayerSignatureResponse = Struct.new(
-      :paymentId,       # Bytes32 — Payment identifier.
-      :status,          # String — Confirms the signature was accepted and stored.
-      :recoveredPayer,  # Address — The address recovered from the signature — should match `payment.payer`. Included for client-side verification.
-      keyword_init: true
-    )
-
-    AuthorizePaymentResponse = Struct.new(
-      :paymentId,            # Bytes32 — Payment identifier.
-      :transactionHash,      # Bytes32 — On-chain transaction hash of the `authorize()` call.
-      :capturableAmount,     # Uint256String — Amount now held in escrow and available for capture (equals the authorized amount).
-      :authorizationExpiry,  # Integer — Unix timestamp after which capture is no longer possible and release becomes available.
-      keyword_init: true
-    )
-
-    ReleasePaymentResponse = Struct.new(
-      :paymentId,        # Bytes32 — Payment identifier.
-      :transactionHash,  # Bytes32 — On-chain transaction hash of the `release()` call.
-      :releasedAmount,   # Uint256String — Amount returned to the payer (was the full remaining capturableAmount).
-      keyword_init: true
-    )
-
-    VoidPaymentResponse = Struct.new(
-      :paymentId,        # Bytes32 — Payment identifier.
-      :transactionHash,  # Bytes32 — On-chain transaction hash of the `void()` call.
-      :releasedAmount,   # Uint256String — Amount returned to the payer (was the full capturableAmount).
-      keyword_init: true
-    )
-
-    # Amount to refund to the payer. Must be > 0 and <= current refundableAmount.
+    # Amount to refund to the payer.
     RefundPaymentRequest = Struct.new(
       :amount,  # Uint256String — Amount to refund (in token base units). Must be > 0 and <= current refundableAmount.
       keyword_init: true
     )
 
-    RefundPaymentResponse = Struct.new(
-      :paymentId,         # Bytes32 — Payment identifier.
-      :transactionHash,   # Bytes32 — On-chain transaction hash of the `refund()` call.
-      :refundedAmount,    # Uint256String — Amount refunded to the payer in this call.
-      :refundableAmount,  # Uint256String — Remaining refundable balance after this refund.
+    # Optional parameters for the release prepare step.
+    ReleaseRequest = Struct.new(
+      :callerAddress,  # Address — Address of the account that will sign and submit the release transaction. Defaults to the payment's `payee` if omitted.
+      keyword_init: true
+    )
+
+    # EIP-712 signature over the `signingPayload` returned by `POST /payments`.
+    PayerSignatureRequest = Struct.new(
+      :signature,  # String — 65-byte secp256k1 signature (0x-prefixed, 132 chars): r (32 bytes) + s (32 bytes) + v (1 byte).
+      keyword_init: true
+    )
+
+    PayerSignatureResponse = Struct.new(
+      :paymentId,       # Bytes32
+      :status,          # String — Confirms the signature was accepted and stored.
+      :recoveredPayer,  # Address — The address recovered from the signature — should match `payment.payer`.
+      keyword_init: true
+    )
+
+    # A blockchain transaction associated with a payment. A `submitted` row is pre-created as soon as
+    # the transaction is broadcast on-chain, so Ponder (the event indexer) can reconcile by `txHash` and
+    # update the row to `confirmed` or `failed` once the block is mined.
+    Transaction = Struct.new(
+      :txHash,       # Bytes32 — Keccak256 hash of the broadcast transaction. Globally unique; used as the Ponder reconciliation key.
+      :paymentId,    # Bytes32 — Parent payment identifier.
+      :operation,    # String — Smart contract operation executed by this transaction.
+      :status,       # String — `submitted` = transaction broadcast to the network, awaiting on-chain confirmation. `confirmed` = mined and successful. `failed` = transaction reverted on-chain.
+      :amount,       # Uint256String — Token amount processed. `null` until confirmed (and always `null` for `approve`).
+      :feeAmount,    # Uint256String — Protocol fee deducted. `"0"` until confirmed.
+      :blockNumber,  # Integer — Block number in which the transaction was mined. `null` until confirmed.
+      :submittedAt,  # String — ISO 8601 timestamp when the transaction was broadcast on-chain.
+      :confirmedAt,  # String — ISO 8601 timestamp when the transaction was confirmed. `null` until confirmed.
       keyword_init: true
     )
 
     ApiErrorBody = Struct.new(
-      :code,     # String — Machine-readable error code.
+      :error,    # String — Machine-readable error code (snake_case).
       :message,  # String — Human-readable error description.
       keyword_init: true
     )

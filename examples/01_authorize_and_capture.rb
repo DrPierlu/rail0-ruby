@@ -1,94 +1,132 @@
-# Standard two-step payment flow: authorize -> capture
-#
-# The buyer locks funds in escrow using an EIP-3009 signature (authorize).
-# The merchant releases them once the order is fulfilled (capture).
+# Standard two-step payment flow: authorize → capture
 #
 # On-chain flow:
-#   buyer signs EIP-3009 -> authorize()   funds move buyer -> escrow
-#   merchant             -> capture()     funds move escrow -> merchant (minus fee)
-#   merchant             -> void()        alternative: funds move escrow -> buyer
-#   anyone               -> release()     fallback after authorization_expiry
+#   payer  signs EIP-3009     → off-chain
+#   payee  PUT /sign          → stores signature server-side
+#   payee  POST /authorize    → get unsigned tx
+#   payee  signs tx off-chain → signed tx
+#   payee  POST /transactions/submit  → async broadcast (HTTP 202)
+#   (poll) GET  /payments/:id → wait for status "authorized"
+#   payee  POST /capture      → get unsigned tx
+#   payee  signs tx off-chain → signed tx
+#   payee  POST /transactions/submit  → async broadcast (HTTP 202)
+#   (poll) GET  /payments/:id → wait for status "captured"
 
 require "rail0"
 
 client = Rail0::Client.new(base_url: "https://api.rail0.xyz")
 
-PAYMENT_ID = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
-
-now = Time.now.to_i
-
-payment = {
-  payer:               "0xBuyerAddress000000000000000000000000000000",
-  payee:               "0xMerchantAddress0000000000000000000000000000",
-  token:               "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", # USDC on Base
-  maxAmount:           "100000000",                  # 100 USDC (6 decimals)
-  authorizationExpiry: now + 60 * 60 * 24,           # merchant has 24 h to capture
-  refundExpiry:        now + 60 * 60 * 24 * 7,       # refund window: 7 days
-  feeBps:              50,                           # 0.5% protocol fee
-  feeReceiver:         "0xFeeReceiverAddress000000000000000000000000"
-}
+MERCHANT_ID = "018e1234-5678-7abc-9def-012345678901"
+CHAIN_ID    = 84532  # Base Sepolia
 
 # ----------------------------------------------------------------
-# Step 1 — Buyer fetches the authorize nonce, signs EIP-3009, calls authorize
+# Step 0 — Fetch accepted payment methods for the merchant
 # ----------------------------------------------------------------
 
-nonce = client.payments.authorize_nonce(PAYMENT_ID, payment[:payer])[:nonce]
+methods = client.merchants.payment_methods(MERCHANT_ID)
+method  = methods.find(&:dig.curry[:isDefault]) || methods.first
 
-# The buyer builds and signs transferWithAuthorization off-chain:
+puts "Using payment method: #{method[:tokenSymbol]} on #{method[:chainName]}"
+puts "  token:  #{method[:tokenAddress]}"
+puts "  payee:  #{method[:walletAddress]}"
+
+# ----------------------------------------------------------------
+# Step 1 — Create payment intent (buyer-side)
+# ----------------------------------------------------------------
+
+create_resp = client.payments.create(
+  payment: {
+    payer:  "0xBuyerAddress000000000000000000000000000000",
+    payee:  method[:walletAddress],
+    token:  method[:tokenAddress],
+    amount: "100000000"  # 100 USDC (6 decimals)
+  },
+  chainId: CHAIN_ID,
+  mode:    "authorize"
+)
+
+payment_id     = create_resp[:paymentId]
+signing_payload = create_resp[:signingPayload]
+
+puts "\nPayment created: #{payment_id}"
+
+# ----------------------------------------------------------------
+# Step 2 — Buyer signs the EIP-712 payload off-chain
+# ----------------------------------------------------------------
 #
-#   require "rail0/signing"
-#   token_domain = Rail0::Signing::TokenDomain.new(
-#     name:                "USD Coin",
-#     version:             "2",
-#     chain_id:            8453,
-#     verifying_contract:  payment[:token]
-#   )
-#   sig = Rail0::Signing.sign_authorize(Rail0::Signing::SignPaymentParams.new(
-#     private_key:      "0x...",
-#     payment:          payment,
-#     amount:           50_000_000,
-#     nonce:            nonce,
-#     contract_address: RAIL0_CONTRACT_ADDRESS,
-#     token_domain:     token_domain
-#   ))
+# Browser wallets:
+#   signature = await window.ethereum.request({
+#     method: "eth_signTypedData_v4",
+#     params: [buyer_address, JSON.stringify(signing_payload)]
+#   })
+#
+# Backend (direct key access):
+#   require "eth"
+#   key     = Eth::Key.new(priv: "0x...")
+#   digest  = Eth::Eip712.hash(signing_payload[:domain], signing_payload[:types], signing_payload[:message])
+#   signature = key.sign(digest)
 
-begin
-  auth_tx = client.payments.authorize(PAYMENT_ID, {
-    payment: payment,
-    amount:  "50000000", # 50 USDC
-    v:       27,         # from signature
-    r:       "0x1111111111111111111111111111111111111111111111111111111111111111",
-    s:       "0x2222222222222222222222222222222222222222222222222222222222222222"
-  })
+signature = "0x" + "ab" * 65  # placeholder — replace with real signature
 
-  puts "Authorized: #{auth_tx[:transactionHash]} — status: #{auth_tx[:status]}"
-  puts "Nonce used: #{nonce}"
-rescue Rail0::ApiError => e
-  # Common errors: TokenNotAccepted, InvalidAmount, PaymentAlreadyExists
-  puts "Authorize failed [#{e.error}]: #{e.message}"
-  raise
+# ----------------------------------------------------------------
+# Step 3 — Submit the payer's signature (payee-side)
+# ----------------------------------------------------------------
+
+sign_resp = client.payments.sign(payment_id, { signature: })
+puts "Signature stored. Recovered payer: #{sign_resp[:recoveredPayer]}"
+
+# ----------------------------------------------------------------
+# Step 4 — Prepare the authorize transaction (payee-side)
+# ----------------------------------------------------------------
+
+prepare_resp = client.payments.prepare_authorize(payment_id)
+puts "\nUnsigned tx ready: #{prepare_resp[:unsignedTransaction][0, 20]}..."
+
+# ----------------------------------------------------------------
+# Step 5 — Payee signs the transaction off-chain, then submits
+# ----------------------------------------------------------------
+#
+#   signed_tx = wallet.sign_transaction(prepare_resp[:unsignedTransaction])
+
+signed_tx = "0x02f8ab"  # placeholder — replace with real signed tx
+
+submit_resp = client.payments.submit_transaction(payment_id, { signedTransaction: signed_tx })
+puts "Submitted. Status: #{submit_resp[:status]}"  # => "submitting"
+
+# ----------------------------------------------------------------
+# Step 6 — Poll until authorized
+# ----------------------------------------------------------------
+
+loop do
+  state = client.payments.get(payment_id)
+  puts "  status: #{state[:status]}"
+  break if state[:status] == "authorized"
+  raise "Payment failed: #{state[:failureCode]} — #{state[:failureMessage]}" if state[:status] == "failed"
+
+  sleep 2
 end
 
+on_chain = client.payments.get(payment_id)[:onChain]
+puts "\nAuthorized. capturableAmount: #{on_chain[:capturableAmount]}"
+
 # ----------------------------------------------------------------
-# Step 2a — Merchant captures 50 USDC (happy path)
+# Step 7 — Prepare a (partial) capture
 # ----------------------------------------------------------------
 
-begin
-  capture_tx = client.payments.capture(PAYMENT_ID, {
-    payment: payment,
-    amount:  "50000000"
-  })
-  puts "Captured: #{capture_tx[:transactionHash]}"
-rescue Rail0::ApiError => e
-  # Common errors: AuthorizationExpired, InvalidCaptureAmount, PaymentMismatch
-  puts "Capture failed [#{e.error}]: #{e.message}"
-  raise
+capture_prepare = client.payments.prepare_capture(payment_id, { amount: "50000000" })
+puts "\nCapture tx ready: #{capture_prepare[:unsignedTransaction][0, 20]}..."
+
+signed_capture = "0x02f9ab"  # placeholder
+
+client.payments.submit_transaction(payment_id, { signedTransaction: signed_capture })
+
+loop do
+  state = client.payments.get(payment_id)
+  puts "  status: #{state[:status]}"
+  break if state[:status] == "captured"
+  raise "Capture failed: #{state[:failureCode]}" if state[:status] == "failed"
+
+  sleep 2
 end
 
-# ----------------------------------------------------------------
-# Inspect on-chain state at any point
-# ----------------------------------------------------------------
-
-state = client.payments.get(PAYMENT_ID)
-puts "Payment state: #{state[:state]}"
-# { exists: true, capturableAmount: "0", refundableAmount: "50000000" }
+puts "\nDone. Payment captured successfully."

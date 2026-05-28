@@ -38,15 +38,15 @@ usdc = methods.find { |m| m['tokenSymbol'] == 'USDC' }
 # Step 2 — payer creates payment intent
 resp = client.payments.create(
   payment: {
-    payer: '0xBuyer...',
-    payee: usdc['walletAddress'],
-    token: usdc['tokenAddress'],
+    payer:  '0xBuyer...',
+    payee:  usdc['walletAddress'],
+    token:  usdc['tokenAddress'],
+    amount: '50000000',      # 50 USDC (6 decimals)
   },
-  amount: '50000000',        # 50 USDC (6 decimals)
   chainId: usdc['chainId'],
   mode: 'authorize'
 )
-payment_id = resp['paymentId']
+payment_id = resp['rail0_id']
 
 # Step 3 — payer signs the EIP-3009 payload off-chain
 require 'rail0/signing'
@@ -187,12 +187,11 @@ Creates a payment intent and returns the EIP-712 signing payload for the payer.
 
 ```ruby
 resp = client.payments.create(
-  payment: { payer: '0x...', payee: '0x...', token: '0x...' },
-  amount: '50000000',
+  payment: { payer: '0x...', payee: '0x...', token: '0x...', amount: '50000000' },
   chainId: 84532,
   mode: 'authorize'  # or 'charge'
 )
-# resp['paymentId']       — bytes32 identifier
+# resp['rail0_id']        — bytes32 identifier
 # resp['signingPayload']  — EIP-712 payload for the payer to sign
 # resp['rail0Contract']   — RAIL0 contract address on the target chain
 ```
@@ -296,7 +295,7 @@ client.payments.sign(payment_id, signature: sig.to_hex)
 sig = Rail0::Signing.sign_authorize(Rail0::Signing::SignPaymentParams.new(
   private_key:      '0x...',
   payment:          resp['payment'],
-  amount:           resp['amount'],
+  amount:           resp['payment']['amount'],
   nonce:            resp['signingPayload']['message']['nonce'],
   contract_address: resp['rail0Contract'],
   token_domain:     Rail0::Signing::TokenDomain.new(

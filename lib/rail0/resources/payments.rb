@@ -8,98 +8,122 @@ module Rail0
       end
 
       # Create a payment intent. Returns the EIP-712 signingPayload for the payer to sign.
-      # @param params [Hash] CreatePaymentRequest: payment (PaymentInput), chainId, mode
-      # @return [Hash] CreatePaymentResponse: paymentId, configHash, payment, chainId, rail0Contract, signingPayload
+      # @param params [Hash] payment (PaymentInput), chain_id, mode
+      # @return [Hash] rail0_id, config_hash, payment, chain_id, rail0_contract, signing_payload
       def create(params)
         @http.post("/payments", params)
       end
 
-      # Fetch current payment state (DB status + live on-chain amounts when applicable).
-      # Poll this after #submit_transaction until status leaves `submitting`.
+      # Fetch current payment state (DB status + live on-chain amounts).
       # @param payment_id [String] bytes32 payment identifier
-      # @return [Hash] GetPaymentResponse: paymentId, status, mode, amount, payer, payee, token,
-      #   chainId, authorizationExpiry, refundExpiry, onChain (optional), lastTxHash (optional),
-      #   failureCode (optional), failureMessage (optional)
+      # @return [Hash] rail0_id, status, mode, amount, payer, payee, token, transactions, …
       def get(payment_id)
         @http.get("/payments/#{payment_id}")
       end
 
-      # Submit the payer's EIP-712 signature over the signingPayload.
-      # @param payment_id [String] bytes32 payment identifier
-      # @param params [Hash] PayerSignatureRequest: signature (65-byte hex, 0x-prefixed, 132 chars)
-      # @return [Hash] PayerSignatureResponse: paymentId, status, recoveredPayer
+      # List payments for the authenticated wallet (requires JWT).
+      # @return [Array<Hash>]
+      def list
+        @http.get("/payments")
+      end
+
+      # Submit the payer's EIP-712 signature.
+      # @param payment_id [String]
+      # @param params [Hash] signature (65-byte 0x-prefixed hex)
+      # @return [Hash] rail0_id, status, recovered_payer
       def sign(payment_id, params)
         @http.put("/payments/#{payment_id}/sign", params)
       end
 
-      # Prepare the unsigned authorize() transaction. Called by the payee.
-      # Requires the payer's signature to have been stored via #sign.
-      # @param payment_id [String]
-      # @return [Hash] PrepareTransactionResponse: unsignedTransaction, to, data, chainId, nonce,
-      #   maxFeePerGas, maxPriorityFeePerGas, gasLimit
-      def prepare_authorize(payment_id)
-        @http.post("/payments/#{payment_id}/authorize")
+      # ── Authorize ────────────────────────────────────────────────────────────
+
+      # Phase 1 — Build the unsigned authorize() transaction.
+      # Creates a Transaction row with status pending.
+      # @return [Hash] unsigned_transaction, to, data, chain_id, nonce, …
+      def authorize_payload(payment_id)
+        @http.post("/payments/#{payment_id}/authorize/payload")
       end
 
-      # Prepare the unsigned charge() transaction (one-shot authorize+capture). Called by the payee.
-      # Requires the payer's signature (mode=charge) to have been stored via #sign.
-      # @param payment_id [String]
-      # @return [Hash] PrepareTransactionResponse
-      def prepare_charge(payment_id)
-        @http.post("/payments/#{payment_id}/charge")
+      # Phase 2 — Submit the signed authorize transaction (HTTP 202).
+      # Poll #get until status == "authorized".
+      # @param params [Hash] signed_transaction (0x-prefixed RLP hex)
+      def authorize(payment_id, params)
+        @http.post("/payments/#{payment_id}/authorize", params)
       end
 
-      # Prepare the unsigned capture() transaction. Called by the payee.
-      # Partial captures are supported: amount may be less than capturableAmount.
-      # @param payment_id [String]
-      # @param params [Hash] CapturePaymentRequest: amount (Uint256String)
-      # @return [Hash] PrepareTransactionResponse
-      def prepare_capture(payment_id, params)
+      # ── Charge ───────────────────────────────────────────────────────────────
+
+      # Phase 1 — Build the unsigned charge() transaction (authorize+capture, no escrow).
+      def charge_payload(payment_id)
+        @http.post("/payments/#{payment_id}/charge/payload")
+      end
+
+      # Phase 2 — Submit the signed charge transaction.
+      # Poll #get until status == "charged".
+      def charge(payment_id, params)
+        @http.post("/payments/#{payment_id}/charge", params)
+      end
+
+      # ── Capture ──────────────────────────────────────────────────────────────
+
+      # Phase 1 — Build the unsigned capture() transaction.
+      # @param params [Hash] amount (Uint256String)
+      def capture_payload(payment_id, params)
+        @http.post("/payments/#{payment_id}/capture/payload", params)
+      end
+
+      # Phase 2 — Submit the signed capture transaction.
+      # Poll #get until status == "captured" or "partially_captured".
+      def capture(payment_id, params)
         @http.post("/payments/#{payment_id}/capture", params)
       end
 
-      # Prepare the unsigned void() transaction. Called by the payee.
-      # Cancels the authorization and returns all escrowed funds to the payer.
-      # @param payment_id [String]
-      # @return [Hash] PrepareTransactionResponse
-      def prepare_void(payment_id)
-        @http.post("/payments/#{payment_id}/void")
+      # ── Void ─────────────────────────────────────────────────────────────────
+
+      # Phase 1 — Build the unsigned void() transaction.
+      def void_payload(payment_id)
+        @http.post("/payments/#{payment_id}/void/payload")
       end
 
-      # Prepare the unsigned refund() transaction. Called by the payee.
-      # Requires an active ERC-20 allowance — call #prepare_approve first if needed.
-      # @param payment_id [String]
-      # @param params [Hash] RefundPaymentRequest: amount (Uint256String)
-      # @return [Hash] PrepareTransactionResponse
-      def prepare_refund(payment_id, params)
-        @http.post("/payments/#{payment_id}/refund", params)
+      # Phase 2 — Submit the signed void transaction.
+      # Poll #get until status == "voided".
+      def void(payment_id, params)
+        @http.post("/payments/#{payment_id}/void", params)
       end
 
-      # Prepare the unsigned release() transaction. Called by the payer or payee.
-      # Returns all remaining escrowed funds to the payer.
-      # @param payment_id [String]
-      # @param params [Hash] ReleaseRequest (optional): callerAddress
-      # @return [Hash] PrepareTransactionResponse
-      def prepare_release(payment_id, params = {})
+      # ── Release ──────────────────────────────────────────────────────────────
+
+      # Phase 1 — Build the unsigned release() transaction.
+      # @param params [Hash] caller_address (optional, defaults to payee)
+      def release_payload(payment_id, params = {})
+        @http.post("/payments/#{payment_id}/release/payload", params)
+      end
+
+      # Phase 2 — Submit the signed release transaction.
+      # Poll #get until status == "released".
+      def release(payment_id, params)
         @http.post("/payments/#{payment_id}/release", params)
       end
 
-      # Prepare the unsigned ERC-20 approve() transaction needed before a refund. Called by the payee.
-      # @param payment_id [String]
-      # @param params [Hash] ApproveRequest: amount (Uint256String)
-      # @return [Hash] PrepareTransactionResponse
-      def prepare_approve(payment_id, params)
-        @http.post("/payments/#{payment_id}/approve", params)
+      # ── Refund (EIP-3009) ────────────────────────────────────────────────────
+
+      # Phase 1a — Request the EIP-3009 signing payload for the payee.
+      # Call with only amount; the payee signs the returned signing_payload.
+      #
+      # Phase 1b — Build the unsigned refund() transaction.
+      # Call again with amount + v, r, s (from the signed EIP-3009 payload).
+      # Returns unsigned_transaction with the EIP-3009 signature embedded.
+      #
+      # No ERC-20 approve() needed — refund uses receiveWithAuthorization.
+      # @param params [Hash] amount + optional (v, r, s)
+      def refund_payload(payment_id, params)
+        @http.post("/payments/#{payment_id}/refund/payload", params)
       end
 
-      # Broadcast a signed transaction on-chain (async). Returns HTTP 202 immediately.
-      # The operation is inferred server-side from the preceding prepare step.
-      # Poll #get until status leaves `submitting` to get the final outcome.
-      # @param payment_id [String]
-      # @param params [Hash] SubmitTransactionRequest: signedTransaction (RLP-encoded signed tx)
-      # @return [Hash] SubmitTransactionAcceptedResponse: paymentId, status ("submitting")
-      def submit_transaction(payment_id, params)
-        @http.post("/payments/#{payment_id}/transactions/submit", params)
+      # Phase 2 — Submit the signed refund transaction.
+      # Poll #get until status == "refunded" or "partially_refunded".
+      def refund(payment_id, params)
+        @http.post("/payments/#{payment_id}/refund", params)
       end
     end
   end

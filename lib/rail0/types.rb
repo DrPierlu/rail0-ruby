@@ -19,8 +19,6 @@ module Rail0
       :amount,                # Uint256String — Exact amount the payer commits to pay (in token base units).
       :authorization_expiry,  # Integer — Unix timestamp (seconds). Capture must happen before this; release opens after.
       :refund_expiry,         # Integer — Unix timestamp (seconds). Refund must happen before this. Must be >= authorization_expiry.
-      :fee_bps,               # Integer — Fee in basis points (0 = no fee, 10000 = 100%).
-      :fee_receiver,          # Address — Recipient of the fee on each capture. Use the zero address when fee_bps is 0.
       keyword_init: true
     )
 
@@ -215,7 +213,6 @@ module Rail0
       :name,        # String
       :slug,        # String
       :email,       # String
-      :fee_bps,     # Integer
       :active,      # Boolean
       :created_at,  # String
       :updated_at,  # String

@@ -37,14 +37,12 @@ usdc = methods.find { |m| m['tokenSymbol'] == 'USDC' }
 
 # Step 2 — payer creates payment intent
 resp = client.payments.create(
-  payment: {
-    payer:  '0xBuyer...',
-    payee:  usdc['walletAddress'],
-    token:  usdc['tokenAddress'],
-    amount: '50000000',      # 50 USDC (6 decimals)
-  },
   chain_id: usdc['chain_id'],
-  mode: 'authorize'
+  mode:     'authorize',
+  amount:   '50000000',      # 50 USDC (6 decimals)
+  payer:    '0xBuyer...',
+  payee:    usdc['walletAddress'],
+  token:    usdc['tokenAddress']
 )
 payment_id = resp['rail0_id']
 
@@ -186,9 +184,12 @@ Creates a payment intent and returns the EIP-712 signing payload for the payer.
 
 ```ruby
 resp = client.payments.create(
-  payment: { payer: '0x...', payee: '0x...', token: '0x...', amount: '50000000' },
   chain_id: 84532,
-  mode: 'authorize'  # or 'charge'
+  mode:     'authorize',  # or 'charge'
+  amount:   '50000000',
+  payer:    '0x...',
+  payee:    '0x...',
+  token:    '0x...'
 )
 # resp['rail0_id']        — bytes32 identifier
 # resp['signingPayload']  — EIP-712 payload for the payer to sign

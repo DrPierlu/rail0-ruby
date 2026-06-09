@@ -4,6 +4,7 @@ require_relative "resources/auth"
 require_relative "resources/chains"
 require_relative "resources/payments"
 require_relative "resources/tokens"
+require_relative "resources/wallets"
 
 module Rail0
   # Entry point for the RAIL0 SDK.
@@ -22,6 +23,8 @@ module Rail0
     attr_reader :payments
     # @return [Resources::Tokens] Token listing operations.
     attr_reader :tokens
+    # @return [Resources::Wallets] Wallet token operations.
+    attr_reader :wallets
 
     # @param base_url [String] Base URL of the RAIL0 API, e.g. "https://api.rail0.xyz".
     # @param headers [Hash] Default headers merged into every request.
@@ -39,6 +42,7 @@ module Rail0
       @chains   = Resources::Chains.new(http)
       @payments = Resources::Payments.new(http)
       @tokens   = Resources::Tokens.new(http)
+      @wallets  = Resources::Wallets.new(http)
     end
   end
 end

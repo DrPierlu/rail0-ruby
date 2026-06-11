@@ -155,9 +155,7 @@ module Rail0
       # @param amount [String] Uint256String amount to refund.
       # @param signature [String, nil] 0x-prefixed hex signature (phase 2 only).
       # @return [Hash]
-      def refund_prepare(rail0_id, amount:, signature: nil)
-        params = { amount: amount }
-        params[:signature] = signature if signature
+      def refund_prepare(rail0_id, params = {})
         @http.post("/payments/#{rail0_id}/refund/prepare", params)
       end
 
